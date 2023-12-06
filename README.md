@@ -1,4 +1,4 @@
-## DevOps-GitHub-Templates
+## Composite-Actions-Templates
   1. Templates repository checkout **(‼️ Mandatory)**.
   2. Semantic versioning (CI).
   3. Docker build (CI).
@@ -10,10 +10,10 @@
   - Action:
   
     ```
-    - name: Checkout DevOps-Templates Repository
+    - name: Checkout Composite-Actions-Templates Repository
       uses: actions/checkout@v3
       with:
-        repository: EitanMedical/DevOps-GitHub-Templates
+        repository: niroslav/composite-actions-templates
         token: ${{ secrets.CLONE_GITHUB_TOKEN }}
         path: './templates-repo'
         ref: main
