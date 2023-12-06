@@ -1,0 +1,53 @@
+name: 'Bump Version and Create Tag'
+
+inputs:
+  templates-workspace:
+    description: "DevOps templates directory"
+    required: true
+
+outputs:
+  fullVersion:
+    description: "Long version"
+    value: ${{ steps.get-new-version.outputs.fullVersion }}
+  shortVersion:
+    description: "Short version"
+    value: ${{ steps.get-new-version.outputs.shortVersion }}
+
+runs:
+  using: 'composite'
+  steps:
+  
+    - name: Check git directory
+      if: ${{ github.event_name != 'pull_request' }}
+      run: |
+        if [ ! -d ".git" ]; then
+          echo "Error --> Failed to find '$(pwd)/.git' directory."
+          exit 1
+        fi
+      shell: bash
+  
+    - name: Get Latest Tag
+      if: ${{ github.event_name != 'pull_request' }}
+      run: echo "LATEST_TAG=$(git tag --sort=taggerdate | grep -w "${{ github.ref_name }}" | tail -1)" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Get latest commit message
+      if: ${{ github.event_name != 'pull_request' }}
+      run: |
+        commitMessage=$(git show -s --format=%s)
+        commitMessage=$(echo ${commitMessage} | sed 's/"/\\"/g')
+        commitMessage=$(echo ${commitMessage} | sed "s/'/''/g")
+        echo "COMMIT_MESSAGE=${commitMessage}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Determine Major/minor/patch and bump version
+      id: get-new-version
+      run: python semantic_version.py --latestTag '${{ env.LATEST_TAG }}' --commitMessage '${{ env.COMMIT_MESSAGE }}' --currentBranch "${{ github.ref_name }}" --pullRequestEvent "${{ github.event_name == 'pull_request' }}"
+      working-directory: ${{ inputs.templates-workspace }}
+      shell: bash
+
+    - name: Create tag
+      if: ${{ github.event_name != 'pull_request' }}
+      uses: rickstaa/action-create-tag@v1
+      with:
+        tag: "${{ steps.get-new-version.outputs.fullVersion }}"

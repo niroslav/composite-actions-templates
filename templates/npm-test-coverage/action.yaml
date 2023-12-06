@@ -1,0 +1,50 @@
+name: npm-test-coverage
+
+inputs:
+  npm-token:
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+      
+    - name: Npm Test & Coverage Command
+      run: |
+        npm i --save-dev jest-junit
+        npm run test:cov -- --coverageThreshold='{"global":{"statements":"${{ env.threshold }}"}}' > ./test.md
+        cat ./test.md
+      shell: bash
+      env:
+        NPM_AUTH_TOKEN: ${{ inputs.npm-token }}
+        threshold: 0
+          
+    - name: Publish Test Results V1
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always()
+      with:
+        files: '*.xml'
+          
+    - name: Publish Test Results V2
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Test Results V2
+        path: '*.xml'
+        reporter: jest-junit
+        
+    - name: Publish Code Coverage Report To Job Summary
+      run: |
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "## Code Coverage" >> $GITHUB_STEP_SUMMARY
+        sed -i -e '1,5d;$ d' ./test.md                      # Deleting the first 5 lines and the last line.
+        if [ "${{ env.include_files }}" = "false" ]; then
+          sed -i 's/-*$//' ./test.md                        # Deleting the last column.
+          sed -i 's/Uncovered Line #s//gi' ./test.md        # Deleting the last column name.
+          sed -i '/.*\.ts/d' ./test.md                      # Deleting all lines that contain files.
+        fi  
+        sed -i 's/All files/**All files**/gi' ./test.md     # Bolding the title.
+        cat ./test.md >> $GITHUB_STEP_SUMMARY
+      shell: bash  
+      env:
+        include_files: false

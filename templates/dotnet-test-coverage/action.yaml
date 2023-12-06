@@ -1,0 +1,50 @@
+name: dotnet-test-coverage
+
+runs:
+  using: "composite"
+  steps:
+      
+    - uses: actions/setup-dotnet@v3
+      name: Dotnet '7.0' installation
+      with:
+        dotnet-version: '7.0'
+        
+    - name: Dotnet test
+      run : dotnet test "./EnhancedDataExposer.sln" --configuration Release --verbosity normal --logger trx --collect:"XPlat Code Coverage" --results-directory ./testResults
+      shell: bash
+          
+    - name: Test Results V1
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Test Results V1
+        path: ./testResults/*.trx
+        reporter: dotnet-trx
+         
+    - name: Test Results V2
+      uses: EnricoMi/publish-unit-test-result-action/composite@v2
+      if: always()
+      with:
+        trx_files: "./testResults/*.trx"
+      
+    - name: Code Coverage
+      uses: irongut/CodeCoverageSummary@v1.3.0
+      if: always()
+      with:
+        filename: ./testResults/**/coverage.cobertura.xml
+        badge: true
+        fail_below_min: false
+        format: markdown
+        hide_branch_rate: false
+        hide_complexity: false
+        indicators: true
+        output: both
+        thresholds: '60 80'
+          
+    - name: Publish Code Coverage Report To Job Summary
+      if: always()
+      run: |
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "## Code Coverage" >> $GITHUB_STEP_SUMMARY
+        cat code-coverage-results.md >> $GITHUB_STEP_SUMMARY
+      shell: bash  

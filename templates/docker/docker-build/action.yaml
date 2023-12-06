@@ -1,0 +1,62 @@
+name: docker-build
+
+# Here we can define the inputs that our action will accept
+inputs:
+  registry:
+    required: true
+    description: 'ACR Endpoint'
+  username:
+    required: true
+    description: 'ACR Username'
+  password:
+    required: true
+    description: 'ACR Password'
+  version:
+    required: false
+    default: 'latest'
+    description: 'Version Of Artifact'
+  app:
+    required: true
+    description: 'Name Of Artifact'
+  owner:
+    required: true
+    description: 'Owner Of Artifact'
+  file:
+    required: false
+    default: './Dockerfile'
+    description: 'Path to the Dockerfile. (default {context}/Dockerfile)'
+  context:
+    required: false
+    default: './'
+    description: 'Builds context is the set of files located in the specified PATH or URL (default Git context)'
+  build-args:
+    required: false
+    default: ''
+    description: 'List of docker variables'
+
+runs:
+  using: "composite"
+  steps:
+  
+    - name: Docker Login to ACR
+      uses: docker/login-action@v2
+      if: ${{ github.event_name != 'pull_request' }}
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Get Valid Branch Name
+      run : |
+        branch=${{github.ref_name}}
+        echo "branch=${branch//\//\-}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Docker Build & push
+      uses: docker/build-push-action@v3
+      with:
+        push: ${{ github.event_name != 'pull_request' }}
+        file: ${{ inputs.file }}
+        context: ${{ inputs.context }}
+        tags: ${{ inputs.registry }}/docker/${{ inputs.owner }}/${{ env.branch }}/${{ inputs.app }}:${{ inputs.version }}
+        build-args: ${{ inputs.build-args }}

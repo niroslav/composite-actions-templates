@@ -1,0 +1,177 @@
+name: helm-deploy
+
+# Here we can define the inputs that our action will accept
+inputs:
+  app:
+    required: true
+    description: 'Application name'
+  owner:
+    required: true
+    description: 'Application owner'
+  key_vault:
+    required: true
+    description: 'Key-vault name'
+  version:
+    required: true
+    description: 'Chart version'
+  azure_credentials:
+    required: true
+    description: 'Azure credentials for login'
+  registry:
+    required: true
+    description: 'ACR Endpoint'
+  username:
+    required: true
+    description: 'ACR Username'
+  password:
+    required: true
+    description: 'ACR Password'
+  prefix_key:
+    required: false
+    default: 'INGRESS_SERVICE_PREFIX'
+    description: 'Ingress prefix for micro-service'
+  argocd_deploy_branch:
+    required: false
+    default: 'dev'
+    description: 'ArgoCD deployment branch'
+  
+runs:
+  using: "composite"
+  steps:
+
+    - run: step="---------------------------------- Azure Login ----------------------------------"
+      shell: bash
+      
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ inputs.azure_credentials }}
+        allow-no-subscriptions: true
+
+    - run: step="---------------------------------- Get ConfigMap From Azure KeyVault ----------------------------------"
+      shell: bash
+    
+    - name: Get ConfigMap From Azure KeyVault
+      uses: Azure/get-keyvault-secrets@v1
+      id: configmap
+      with:
+        keyvault: ${{ inputs.key_vault }}
+        secrets: ${{ inputs.app }}
+
+    - run: step="---------------------------------- Update ConfigMap From Json ----------------------------------"
+      shell: bash
+          
+    - name: Update ConfigMap From Json
+      run: |
+        echo ${{ steps.configmap.outputs[format('{0}', inputs.app)] }} | jq -r 'to_entries[] | [.key, .value] | @tsv' | sed 's/^/  /' | sed 's/\t/: "/' | sed 's/$/"/' >> ./configmap.yaml
+      working-directory: './DevOps/Chart/templates'
+      shell: bash
+
+    - run: step="---------------------------------- Extract Ingress Service Prefix From ConfigMap ----------------------------------"
+      shell: bash
+          
+    - name: Extract Ingress Service Prefix From ConfigMap
+      run: |
+        PREFIX_KEY=$(echo ${{ steps.configmap.outputs[format('{0}', inputs.app)] }} | jq 'to_entries[] | select(.key | contains("${{ inputs.prefix_key }}")) | .key')
+        echo "ingressServicePrefix=$(echo ${{ steps.configmap.outputs[format('{0}', inputs.app)] }} | jq -r .${PREFIX_KEY})" >> $GITHUB_ENV
+      shell: bash
+
+    - run: step="---------------------------------- Values.yaml Update Parameters ----------------------------------"
+      shell: bash
+    
+    - name: Values.yaml Update Parameters
+      run: sed -i "s/<APP>/${{ inputs.app }}/gi; s/<REGISTRY>/${{ inputs.registry }}/gi; s/<OWNER>/${{ inputs.owner }}/gi; s/<IMAGE_TAG>/${{ inputs.version }}/gi; s/<INGRESS_SERVICE_PREFIX>/\${{ env.ingressServicePrefix }}/gi" ./values.yaml && cat ./values.yaml
+      working-directory: './DevOps/Chart'
+      shell: bash
+
+    - if: ${{ github.ref_name == inputs.argocd_deploy_branch }}
+      run: step="---------------------------------- Values.yaml Update Parameters For Deployment ----------------------------------"
+      shell: bash
+    
+    - name: Values.yaml Update Parameters For Deployment
+      if: ${{ github.ref_name == inputs.argocd_deploy_branch }}
+      run: sed -i "s/<ENVIRONMENT>/${{ inputs.argocd_deploy_branch }}/gi" ./values.yaml && cat ./values.yaml
+      working-directory: './DevOps/Chart'
+      shell: bash
+
+    - run: step="---------------------------------- Chart.yaml Update Parameters ----------------------------------"
+      shell: bash
+
+    - name: Chart.yaml Update Parameters
+      run: |
+        branch=${{github.ref_name}}
+        sed -i "s/<VERSION>/${{ inputs.version }}/gi; s/<ORIGIN_BRANCH>/${branch//\//\\/}/gi; s/<COMMIT_SHA>/${{github.sha}}/gi" ./Chart.yaml && cat ./Chart.yaml
+      working-directory: './DevOps/Chart'
+      shell: bash
+
+    - run: step="---------------------------------- Deployment.yaml Update Parameters ----------------------------------"
+      shell: bash
+
+    - name: Deployment.yaml Update Parameters
+      run: |
+        branch=${{github.ref_name}}
+        sed -i "s/<ORIGIN_BRANCH>/${branch//\//\-}/gi; s/<COMMIT_SHA>/${{github.sha}}/gi" ./deployment.yaml
+      working-directory: './DevOps/Chart/templates'  
+      shell: bash
+
+    - run: step="---------------------------------- Chart Validation ----------------------------------"
+      shell: bash
+        
+    - name: Chart Validation
+      run: helm template . --dry-run 1>/dev/null
+      working-directory: './DevOps/Chart' 
+      shell: bash
+
+    - run: step="---------------------------------- Helm Package & Login & Push to ACR ----------------------------------"
+      shell: bash
+      
+    - name: Helm Package & Login & Push to ACR
+      if: ${{ github.event_name != 'pull_request' }}
+      run: |
+        branch=${{github.ref_name}}
+        branch=${branch//\//\-}
+        helm package .
+        helm registry login ${{ inputs.registry }} -u ${{ inputs.username }} -p ${{ inputs.password }}
+        helm push ./*.tgz oci://${{ inputs.registry }}/helm/${{ inputs.owner }}/${branch}
+      working-directory: './DevOps/Chart'  
+      shell: bash
+
+    - if: ${{ github.event_name != 'pull_request' && github.ref_name == inputs.argocd_deploy_branch }}
+      run: step="---------------------------------- Argo-CD CLI Installation ----------------------------------"
+      shell: bash
+
+    - name: Argo-CD CLI Installation
+      if: ${{ github.event_name != 'pull_request' && github.ref_name == inputs.argocd_deploy_branch }}
+      uses: clowdhaus/argo-cd-action/@main
+      with:
+        version: 2.6.7
+        command: version
+        options: --client
+
+    - if: ${{ github.event_name != 'pull_request' && github.ref_name == inputs.argocd_deploy_branch }}
+      run: step="---------------------------------- Argo-CD Deployment ----------------------------------"
+      shell: bash
+
+    - name: Argo-CD Deployment
+      if: ${{ github.event_name != 'pull_request' && github.ref_name == inputs.argocd_deploy_branch }}
+      run: |
+        branch=${{github.ref_name}}
+        branch=${branch//\//\-}
+        argocd login ${{ env.argocd_dev_ip }}:443 --username $(az keyvault secret show --vault-name ${{ env.key_vault }} --name ${{ env.key_vault_secret_user }} --query value -o tsv) --password $(az keyvault secret show --vault-name ${{ env.key_vault }} --name ${{ env.key_vault_secret_password }} --query value -o tsv) --insecure
+        output=$(argocd app list | grep -w "${{ inputs.app }}" || true)
+        if [ -z "${output}" ]; then
+          echo -e "\n --> Application '${{ inputs.app }}' wasn't found on Argo-CD server. 'Create' command is currently being executed...\n"
+          argocd app create "${{ inputs.app }}" --repo "${{ inputs.registry }}/helm" --helm-chart "${{ inputs.owner }}/${branch}/${{ inputs.app }}" --revision "${{ inputs.version }}" --dest-namespace "${app_dest_namespace}" --dest-server https://kubernetes.default.svc --sync-policy automated --self-heal --auto-prune --sync-option CreateNamespace=true --helm-set ingress.className="${nginx_namespace}" --helm-set ingress.host="${host}"
+        else
+          echo -e "\n --> Application '${{ inputs.app }}' was found on Argo-CD server. 'Patch' command is starting...\n"
+          argocd app patch "${{ inputs.app }}" --patch '{"spec": { "source": { "targetRevision": "${{ inputs.version }}", "chart": "${{ inputs.owner }}/'"${branch}"'/${{ inputs.app }}" } }}' --type merge
+        fi
+      env:
+        app_dest_namespace: "em-dev"
+        nginx_namespace: "em-dev"
+        host: "em-dev-ingress-controller.deveitaninsights.com"
+        argocd_dev_ip: "20.71.70.65"
+        key_vault: "aks-res-dev-42be"
+        key_vault_secret_user: "argo-cd-dev-user"
+        key_vault_secret_password: "argo-cd-dev-password"
+      shell: bash
